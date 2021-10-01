@@ -148,6 +148,7 @@ for msel in range(12):
                      np.append(fit[:,0],3))
     yfit = np.append(np.linspace(1,fit[:,1][1],5),
                      np.append(fit[:,1],0))
+    yfit = np.clip(yfit,0,1)  ## prevent getting icefrac outside of 0 to 1
 
     ## where masks are different (and there isnt ice already), need to check for new ice
 
@@ -212,7 +213,7 @@ for msel in range(12):
 
     ## save files
     savepath = '/home/disk/sipn/vcooper/nobackup/lgm/infilled/'
-    fname = 'lgmDA_lgm_ICEFRAC_monthly_climo_merged_' + mstr + '.nc'
+    fname = 'lgmDA_lgm_ICEFRAC_monthly_climo_merged_' + mstr + '_v2.nc'
 
     icecombo2.to_netcdf(savepath + fname)
     print('finished saving month ' + mstr)

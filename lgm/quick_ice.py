@@ -12,6 +12,9 @@ import copy
 import pandas as pd
 import seaborn as sns
 
+import warnings
+warnings.filterwarnings('ignore')
+
 ### Preprocessing ###
 ## Load SST
 ddir = '/home/disk/atmos/vcooper/work/p2c2/lgm/'
@@ -58,7 +61,7 @@ regridder = xe.Regridder(data_for_regridding, newgrid,
                          periodic=True,
                          filename='bilinear_sst_to_ice_per.nc',
                          reuse_weights=True)
-print(regridder)
+# print(regridder)
 
 ## regrid the lgm sst onto the sea ice grid
 newgrid = holo_ice_climo # desired grid
@@ -69,6 +72,37 @@ regridder_holo = xe.Regridder(data_for_regridding, newgrid,
                          periodic=True,
                          filename='bilinear_sst_to_ice_per_holo.nc',
                          reuse_weights=True)
+
+############# ICE SHEET ADJUSTMENTS ######
+# THIS VERSION HAS NOT GONE THROUGH HURRELL ADJUSTMENTS
+# SO IT IS CONSISTENT WITH Infilling>IceSheet>Meridian>Hurrell>BCGEN
+path = '/home/disk/sipn/vcooper/nobackup/lgm/infilled/'
+# lgm_ice_merged = xr.open_dataset(
+#     path + 'lgmDA_lgm_ICEFRAC_monthly_climo_merged_v2.nc').set_coords(['lat','lon'])
+# lgm_sst_merged = xr.open_dataset(path + 
+#                                      'lgmDA_lgm_SST_monthly_climo_merged.nc')
+ice6g = xr.open_dataset('/home/disk/sipn/vcooper/nobackup/lgm/peltier_lgm-mask/' + 'I6_C.VM5a_1deg.21.nc')
+ice6g_0 = xr.open_dataset('/home/disk/sipn/vcooper/nobackup/lgm/peltier_lgm-mask/' + 'I6_C.VM5a_1deg.0.nc')
+
+## SST (icefrac is already on 1.9x2.5 grid)
+# amip2000['mask'] = xr.where(~np.isnan(amip2000.SST_cpl[0]),1,0) ## dummy mask
+newgrid = lgm_ice_climo.icefrac[0] # desired grid
+data_for_regridding = ice6g
+data_for_regridding['mask'] = xr.where(~np.isnan(data_for_regridding.sftlf),1,0)
+
+regridder_ice6g = xe.Regridder(data_for_regridding, newgrid,
+                         method='bilinear',
+                         periodic=True,
+#                          extrap_method='inverse_dist',extrap_num_src_pnts=64,
+                         filename='bilinear_noextrapc.nc',
+                         reuse_weights=True)
+
+ice6g_regrid = regridder_ice6g(data_for_regridding)
+# ice6g_0_regrid = regridder_ice6g(ice6g_0)
+
+## store new data in this dataset
+icecombo_all = lgm_ice_climo.icefrac.to_dataset().copy(
+    data={'icefrac':np.zeros_like(lgm_ice_climo.icefrac.values)})
 
 for msel in range(12):
     
@@ -210,184 +244,216 @@ for msel in range(12):
     
     ## put NH and SH together
     icecombo2 = xr.where(icecombo.lat < 0, merged_icegrid2, icecombo)
+    
+    #### ICE SHEET ADJ
+    ## set minimum icefrac to be ice sheet frac
+    icecombo2 = xr.where(icecombo2*100 < ice6g_regrid.sftgif.values, 
+                               ice6g_regrid.sftgif.values/100, icecombo2)
+    
+    #### ICE SHEET ADJ
+    ## set minimum icefrac to be ice sheet frac
+    icecombo2 = xr.where(icecombo2*100 < ice6g_regrid.sftgif.values, 
+                               ice6g_regrid.sftgif.values/100, icecombo2)
 
-    ## save files
-    savepath = '/home/disk/sipn/vcooper/nobackup/lgm/infilled/'
-    fname = 'lgmDA_lgm_ICEFRAC_monthly_climo_merged_' + mstr + '_v2.nc'
+    ## adjustment along meridians to patch in gaps
+    latmin=68
+    for imer,val in enumerate(icecombo2.transpose('nLon',...)):
+        valnh = val.where(val.lat > latmin)
 
-    icecombo2.to_netcdf(savepath + fname)
-    print('finished saving month ' + mstr)
+        ## check maximum ice poleward and equatorward, along meridian
+        max_ice_poleward = np.array([valnh[j:].max() for j in range(len(valnh))])
+        max_ice_equatorward = np.array([valnh[0:j+1].max() for j in range(len(valnh))])
 
+        ## ice ceiling is maximum value ice will increase to. don't go below the original
+        ## ice value, and don't go above the maximum SIC poleward of position
+        ice_ceiling = np.array([np.max([p,v]) for p,v in zip(max_ice_poleward,valnh)])
+        max_ice_equatorward = np.where((max_ice_equatorward > valnh) & (max_ice_equatorward > ice_ceiling), 
+                                   ice_ceiling, max_ice_equatorward)
 
-    ## PLOTTING TO CHECK RESULTS
-    # proj = ccrs.NorthPolarStereo()
+        val = xr.where(val.lat > latmin, max_ice_equatorward, val)
+        icecombo2[:,imer] = val
+    
+    icecombo_all.icefrac[msel] = icecombo2
+    print(msel)
+    
+    
+## save files
+savepath = '/home/disk/sipn/vcooper/nobackup/lgm/infilled/'
+fname = 'lgmDA_lgm_ICEFRAC_monthly_climo_merged_v3.nc'
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_temp_icegrid,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Original SST from LGM on ice grid')
-    # plt.colorbar()
-    # plt.show()
+icecombo_all.to_netcdf(savepath + fname)
+print('finished saving')
+    
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Ice in LGM (no actual mask for SIC data)')
-    # plt.colorbar()
-    # plt.show()
+## PLOTTING TO CHECK RESULTS
+# proj = ccrs.NorthPolarStereo()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice.where(lgmmask),
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Original Ice in LGM with Implied Mask')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_temp_icegrid,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Original SST from LGM on ice grid')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice.where(newmask | lgmmask),
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('New Ocean Mask, Original LGM Ice')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Ice in LGM (no actual mask for SIC data)')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                (diffmask*1).where(newmask | lgmmask),
-    #                transform=ccrs.PlateCarree(),
-    #                cmap='cividis',alpha=1)
-    # plt.title('Possible new locations for sea ice')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice.where(lgmmask),
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Original Ice in LGM with Implied Mask')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                icecombo,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Infilled Ice')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice.where(newmask | lgmmask),
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('New Ocean Mask, Original LGM Ice')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, 40, 90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice_holo,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Holocene reference')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                (diffmask*1).where(newmask | lgmmask),
+#                transform=ccrs.PlateCarree(),
+#                cmap='cividis',alpha=1)
+# plt.title('Possible new locations for sea ice')
+# plt.colorbar()
+# plt.show()
 
-    # proj = ccrs.SouthPolarStereo()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 36, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                icecombo,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Infilled Ice')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_temp_icegrid,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Original SST from LGM on ice grid')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, 40, 90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice_holo,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Holocene reference')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Ice in LGM (no actual mask for SIC data)')
-    # plt.colorbar()
-    # plt.show()
+# proj = ccrs.SouthPolarStereo()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice.where(lgmmask),
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Original Ice in LGM with Implied Mask')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_temp_icegrid,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Original SST from LGM on ice grid')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice.where(newmask | lgmmask),
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('New Ocean Mask, Original LGM Ice')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Ice in LGM (no actual mask for SIC data)')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                (diffmask*1).where(newmask | lgmmask),
-    #                transform=ccrs.PlateCarree(),
-    #                cmap='cividis',alpha=1)
-    # plt.title('Possible new locations for sea ice')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice.where(lgmmask),
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Original Ice in LGM with Implied Mask')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                icecombo,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Infilled Ice')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice.where(newmask | lgmmask),
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('New Ocean Mask, Original LGM Ice')
+# plt.colorbar()
+# plt.show()
 
-    # fig = plt.subplots(figsize=(8,6))
-    # ax = plt.subplot(projection=proj)
-    # ax.coastlines(color='0.5')
-    # ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
-    # plt.pcolormesh(ds_ice.lon,ds_ice.lat,
-    #                ds_ice_holo,
-    #                transform=ccrs.PlateCarree(),
-    #                cmap=cmap_nan,alpha=1)
-    # plt.title('Holocene reference')
-    # plt.colorbar()
-    # plt.show()
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                (diffmask*1).where(newmask | lgmmask),
+#                transform=ccrs.PlateCarree(),
+#                cmap='cividis',alpha=1)
+# plt.title('Possible new locations for sea ice')
+# plt.colorbar()
+# plt.show()
+
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                icecombo,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Infilled Ice')
+# plt.colorbar()
+# plt.show()
+
+# fig = plt.subplots(figsize=(8,6))
+# ax = plt.subplot(projection=proj)
+# ax.coastlines(color='0.5')
+# ax.set_extent([-180, 180, -40, -90], ccrs.PlateCarree())
+# plt.pcolormesh(ds_ice.lon,ds_ice.lat,
+#                ds_ice_holo,
+#                transform=ccrs.PlateCarree(),
+#                cmap=cmap_nan,alpha=1)
+# plt.title('Holocene reference')
+# plt.colorbar()
+# plt.show()

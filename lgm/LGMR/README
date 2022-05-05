@@ -1,0 +1,15 @@
+LGMR data from Osman et al 2021.
+
+Shared here: https://drive.google.com/drive/folders/190zKkwCQoqIMnoI8w88z0V2D32qT-bZx
+
+And downloaded using gdown, refer to gdown.ipynb notebook for how to links.
+I used command line, but the notes are in the ipynb.
+
+Note: i renamed lat to nlat and lon to nlon, then deleted original files. 
+
+I had to convert to netcdf3, rename, then back to netcdf4. This is described
+in my Historial_SSTs google doc notes.
+
+The workable version of the files for python are the "ncks_*v2.nc" files.
+Lazy named during my scratch work.
+

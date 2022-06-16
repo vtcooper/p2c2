@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+## THIS script IS DEFUNCT
+#- infilling after anomaly specification gave weird results
+#- instead, i did anomaly correction in prep_cam_bc-normT.ipynb
+#- which worked well
+
 #########
+
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -20,7 +26,7 @@ begin_time = datetime.datetime.now()
 
 
 ## this will determine name of what is saved
-setname = 'lgmDA_lgmNorm_SST_monthly_climo_v2.1'
+setname = 'lgmDA_lgmNormN_SST_monthly_climo_v2.1'
 
 ## load target holo and lgm data
 path = '/home/disk/atmos/vcooper/work/p2c2/lgm/'
@@ -42,7 +48,7 @@ gmean_sstanom = (
 print(gmean_sstanom)
 
 ## rebase the anomaly to specified magnitude
-select_dT = 0.5
+select_dT = -0.5
 ds_lgm_sst_normed = (
     ds_lgm_sst.sst - ds_holo_sst.sst) * select_dT/gmean_sstanom + ds_holo_sst.sst
 
@@ -85,7 +91,7 @@ lgm_sst_climo_hologrid_extrap = regridder(lgm_sst_climo)
 
 
 ## start with single month of SSTs
-for msel in range(2,12):
+for msel in range(12):
 #     msel=0 ## 0 for anoann, 1 for recann
     ds = lgm_sst_climo.sst[msel]#.sel(nLat=latslice,nLon=lonslice)
     ds_holo = holo_sst_climo.sst[msel]#.sel(nLat=latslice,nLon=lonslice)
@@ -455,10 +461,10 @@ for msel in range(2,12):
     mstring = str(frank_mask.month.values).zfill(2)
 #     savepath = '/home/disk/sipn/vcooper/nobackup/lgm/infilled/'
     savepath = '/home/disk/atmos/vcooper/nobackup~/temp_lgm/'
-    fname_krig = setname + '_krigged_' + mstring + '.nc'
+#     fname_krig = setname + '_krigged_' + mstring + '.nc'
     fname_merged = setname + '_merged_' + mstring + '.nc'
 
-    frank_mask.to_netcdf(savepath + fname_krig)
+#     frank_mask.to_netcdf(savepath + fname_krig)
     merged.to_netcdf(savepath + fname_merged)
     print('finished saving month ' + mstring)
 
